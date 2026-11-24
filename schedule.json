@@ -185,5 +185,5 @@
   ],
   "_about": "When each model's runs start (UTC hours) and how many minutes after that the whole run is usually out. The clock (clock.py) starts looking for a run 20 minutes before that and starts its build the moment the last forecast hour is published. Times: wethr.net/model-schedule (measured arrival times), Wetterzentrale and WeatherBell posting windows, ECMWF's open data notes; the rest are this project's own measured lags. NAM, NAM Nest, HREF and SREF are not here: NOAA retired them on 2026-11-03 (SCN 26-47), replaced by RRFS and REFS.",
   "max_at_once": 4,
-  "jobs": [{"workflow": "fields.yml", "every_min": 30}, {"workflow": "cyclones.yml", "every_min": 60}, {"workflow": "weeklies.yml", "every_min": 180}]
+  "jobs": [{"workflow": "fields.yml", "every_min": 30}, {"workflow": "cyclones.yml", "every_min": 60}, {"workflow": "weeklies.yml", "every_min": 180}, {"workflow": "extras-slow.yml", "every_min": 30}]
 }

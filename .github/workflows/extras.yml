@@ -1,0 +1,46 @@
+name: Small jobs, round the clock
+
+# Lightning every 2 minutes, storm vitals and storm satellite trends every 10: one job that goes on for a few hours,
+# and the next run is started when it ends. Never on pull requests.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["trigger/extras"]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    concurrency:
+      group: extras-quick
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+        run: python3 extras.py --group quick --loop 320
+  next:
+    needs: quick
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          started=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .run_started_at)
+          age=$(( $(date -u +%s) - $(date -u -d "$started" +%s) ))
+          if [ "$age" -gt 900 ]; then gh workflow run extras.yml --repo "$REPO" --ref main; else echo "too short: not starting another"; fi

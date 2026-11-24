@@ -4,3 +4,4 @@ pillow
 requests
 eccodes
 h5py
+netCDF4
