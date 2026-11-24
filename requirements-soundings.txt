@@ -1,0 +1,13 @@
+matplotlib
+metpy
+xarray
+siphon
+cfgrib
+netCDF4
+bs4
+ecape_parcel
+cdsapi
+shapely
+fsspec
+s3fs
+cartopy

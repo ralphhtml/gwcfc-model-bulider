@@ -1,0 +1,66 @@
+name: Ensemble fields and soundings
+
+# On a schedule and by hand only. Never on pull requests: code from a fork must not see the secrets.
+on:
+  schedule:
+    - cron: "7,47 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["trigger/fields"]
+
+permissions:
+  contents: read
+
+jobs:
+  ens:
+    # Every member's fields of each ensemble, one ensemble a job. Each checks in every hour; it only builds when
+    # there is a run the server does not have whole.
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ["gefs", "geps", "sref", "gfs", "ecmwf", "ecmwfens"]
+    concurrency:
+      group: ens-${{ matrix.model }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - name: Run and upload
+        env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          MODEL: ${{ matrix.model }}
+        run: python3 tree.py --job "ens-$MODEL"
+
+  soundings:
+    # The hourly sounding picture of every upper-air site.
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    concurrency:
+      group: soundings
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-soundings.txt
+      - run: |
+          pip install -q -r requirements.txt -r requirements-soundings.txt
+          pip install -q --no-deps sounderpy==3.3.0 sharppy==1.4.0a5
+      - name: Run and upload
+        env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          PIP_NO_INDEX: "1"
+        run: python3 tree.py --job soundings

@@ -3,6 +3,8 @@
 
     python3 tree.py --job cyclone     # GEFS centres, ECMWF cyclone odds, GEPS and AIFS tracks, GFS and ECMWF lows
     python3 tree.py --job cyclones    # Google DeepMind's cyclone tracks and genesis grids
+    python3 tree.py --job ens-gefs    # every member's fields of one ensemble (gefs, geps, sref, gfs, ecmwf, ecmwfens)
+    python3 tree.py --job soundings   # the hourly sounding picture of every upper-air site
     python3 tree.py --job cyclone --dry
 
 These jobs keep their own small index files (which run is the newest, which models have lows), so the server's
@@ -29,7 +31,12 @@ JOBS = {
     "cyclone": ("enscenters", ["latest.json", "lows/latest.json", "ecmwf/latest.json", "geps/latest.json",
                                "aifs-ens/latest.json"]),
     "cyclones": ("cyclones", ["latest.json"]),
+    "soundings": ("soundings", ["manifest.json", "state.json"]),
 }
+ENS_MODELS = ["gefs", "geps", "sref", "gfs", "ecmwf", "ecmwfens"]
+for _m in ENS_MODELS:
+    JOBS["ens-" + _m] = ("ens", ["index.json"])
+LAST = ("latest.json", "manifest.json", "index.json")
 
 
 def log(msg):
@@ -85,7 +92,7 @@ def changed(root, seeded):
             if rel in seeded and seeded[rel] == sha(p):
                 continue
             out.append(rel)
-    return sorted(out, key=lambda r: (r.endswith("latest.json"), r.count("/") == 0, r))
+    return sorted(out, key=lambda r: (r.rsplit("/", 1)[-1] in LAST, r.count("/") == 0, r))
 
 
 def run_cyclone(base, root, seeded):
@@ -157,6 +164,92 @@ def run_cyclones(base, root, seeded):
         log(f"cyclones: {e.__class__.__name__}: {str(e)[:200]}")
 
 
+def _json(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def run_ens(base, root, seeded, model):
+    """One ensemble's member fields. Returns what the commit should carry: the model's entry for the server's index
+    (the server puts it in beside the other models' entries) and the one run to keep."""
+    import ens_fields_pipeline as ef
+    ens = ef.ENSEMBLES[model]
+    d, c = ef.newest_cycle(ens)
+    run = f"{d}_{c}"
+    entry = (_json(os.path.join(root, "index.json")).get("models") or {}).get(model) or {}
+    if entry.get("run") == run and entry.get("complete"):
+        log(f"{model}: the server has {run} whole")
+        return {}
+    if entry.get("run") == run and entry.get("hours"):
+        # Part built already (an earlier job here was cut short): carry on from its last hour, as the pipeline does
+        # from a run on its own disk. It needs the run's manifest and, for the running rain total, the last hour's.
+        rels = [f"{model}/{run}/manifest.json"]
+        if "qpf" in (entry.get("fields") or []):
+            rels.append(f"{model}/{run}/qpf_f{int(entry['hours'][-1]):03d}.bin.gz")
+        for rel in rels:
+            body = fetch(base, f"ens/{rel}")
+            if body is None:
+                continue
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as fh:
+                fh.write(body)
+            seeded[rel] = hashlib.sha256(body).hexdigest()
+    man = ef.build(model, d, c)
+    if not man.get("hours"):
+        log(f"{model}: {run} is not published yet")
+        seeded[f"{model}/{run}/manifest.json"] = sha(os.path.join(root, model, run, "manifest.json"))
+        return {}
+    mine = (_json(os.path.join(root, "index.json")).get("models") or {}).get(model)
+    return {"index_entry": {"model": model, "entry": mine}, "only": {model: [run]}} if mine else {}
+
+
+def run_soundings(base, root, seeded):
+    """The sites the server does not have this hour's sounding of, then one manifest: the server's frames of the
+    last day and the new ones."""
+    os.environ.setdefault("GWCFC_SND_PASS_MAX", "500")
+    os.environ.setdefault("GWCFC_SND_PASS_SECS", "6000")
+    import datetime as dt
+    import sounding_pipeline as sp
+    theirs = (_json(os.path.join(root, "manifest.json")).get("sites") or {})
+    now = dt.datetime.now(dt.timezone.utc)
+    stamp = sp.wanted_valid(now).strftime("%Y%m%d_%H%M%S")
+    need = [s[0] for s in sp.SITES if stamp not in ((theirs.get(s[0]) or {}).get("frames") or [])]
+    if not need:
+        log(f"soundings: the server has {stamp} of every site")
+        return {"keep_hours": sp.KEEP_HOURS}
+    gone = sp.missing_deps()
+    if gone:
+        log("soundings: cannot build: " + "; ".join(f"{m}: {e}" for m, _w, e in gone)[:600])
+        return {"no_commit": True}
+    log(f"soundings: {len(need)} of {len(sp.SITES)} sites to build for {stamp}")
+    sp.run_pass(only=need, now=now)
+    cut = (now - dt.timedelta(hours=sp.KEEP_HOURS)).strftime("%Y%m%d_%H%M%S")
+    man = _json(os.path.join(root, "manifest.json"))
+    sites = man.get("sites") or {}
+    for sid, name, lat, lon in sp.SITES:
+        old = [f for f in ((theirs.get(sid) or {}).get("frames") or []) if isinstance(f, str) and f >= cut]
+        new = (sites.get(sid) or {}).get("frames") or []
+        frames = sorted(set(old) | set(new))
+        if not frames:
+            sites.pop(sid, None)
+            continue
+        sites[sid] = {"name": name, "lat": lat, "lon": lon, "dir": f"{sid}/{frames[-1]}",
+                      "valid": dt.datetime.strptime(frames[-1], "%Y%m%d_%H%M%S").strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "frames": frames}
+    man.update({"updated": now.isoformat(), "source": "rap",
+                "engine": {"fetch": "SounderPy", "params": "SHARPpy"}, "sites": sites})
+    with open(os.path.join(root, "manifest.json"), "w") as fh:
+        json.dump(man, fh)
+    built = sum(1 for sid in need if os.path.exists(os.path.join(root, sid, stamp, "skewt.png")))
+    log(f"soundings: {built} of {len(need)} built")
+    # With nothing built the upstream is down: no check-in, so the server's own job is not kept waiting on us.
+    return {"keep_hours": sp.KEEP_HOURS} if built else {"no_commit": True}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--job", required=True, choices=sorted(JOBS))
@@ -176,13 +269,27 @@ def main(argv=None):
     seeded = seed(base, tree, root, rels)
     log(f"{a.job}: started from {len(seeded)} of the server's index files")
     t0 = time.time()
-    (run_cyclone if a.job == "cyclone" else run_cyclones)(base, root, seeded)
+    extra = {}
+    if a.job.startswith("ens-"):
+        extra = run_ens(base, root, seeded, a.job[4:]) or {}
+    elif a.job == "soundings":
+        extra = run_soundings(base, root, seeded) or {}
+    else:
+        (run_cyclone if a.job == "cyclone" else run_cyclones)(base, root, seeded)
     rels_out = changed(root, seeded)
+    if tree == "ens":
+        # The server puts this model's entry into its index itself (see the commit), so the other models' jobs,
+        # running at the same time, do not overwrite each other's.
+        mine = a.job[4:] + "/"
+        rels_out = [r for r in rels_out if r.startswith(mine)]
+    if extra.pop("no_commit", False):
+        rels_out = []
+        a.dry = True
     size = sum(os.path.getsize(os.path.join(root, r)) for r in rels_out)
     log(f"{a.job}: {len(rels_out)} new or changed files, {size / 1e6:.1f} MB, in {time.time() - t0:.0f}s")
-    if a.dry or not rels_out:
-        if not rels_out:
-            log("nothing new: the server has everything")
+    if not rels_out:
+        log("nothing new")
+    if a.dry:
         return 0
 
     fd, key_path = tempfile.mkstemp(prefix="k-")
@@ -209,7 +316,8 @@ def main(argv=None):
         bsize += s
     if batch:
         send(batch)
-    out = B.post(base, key_path, "tree", tree, run, "commit", part, json.dumps({"job": a.job}).encode())
+    out = B.post(base, key_path, "tree", tree, run, "commit", part, json.dumps(dict(extra, job=a.job)).encode())
+    # The commit goes even with nothing new: it is the check-in the server's own job reads to know this one is alive.
     log(f"uploaded {len(rels_out)} files in {part} parts; the server let go of {out.get('pruned', 0)} old ones")
     os.unlink(key_path)
     return 0
