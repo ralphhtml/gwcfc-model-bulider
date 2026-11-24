@@ -1,0 +1,64 @@
+name: Build models
+
+# On a schedule and by hand only. Never on pull requests: code from a fork must not see the secrets.
+on:
+  schedule:
+    - cron: "12,42 * * * *"
+  # A push that changes trigger/now starts a build too (a way to start one without the Run workflow button).
+  # Only pushes to this repository's own main branch: a fork's pull request never runs this.
+  push:
+    branches: [main]
+    paths: ["trigger/now"]
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model (hrrr)"
+        default: "hrrr"
+      region:
+        description: "Region"
+        default: "conus"
+      run:
+        description: "Run, YYYYMMDD_HH (empty: the newest complete run)"
+        default: ""
+      hours:
+        description: "Only these forecast hours, e.g. 0,1,2 (empty: all)"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ["hrrr/conus"]
+    # One build of a model at a time: a run still being drawn is finished, the next start waits.
+    concurrency:
+      group: build-${{ matrix.target }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - name: Build and upload
+        env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          IN_MODEL: ${{ inputs.model }}
+          IN_REGION: ${{ inputs.region }}
+          IN_RUN: ${{ inputs.run }}
+          IN_HOURS: ${{ inputs.hours }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          model="${IN_MODEL:-${TARGET%%/*}}"
+          region="${IN_REGION:-${TARGET##*/}}"
+          args="--model $model --region $region"
+          case "$IN_RUN" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9]) args="$args --run $IN_RUN" ;; esac
+          case "$IN_HOURS" in *[!0-9,]*|"") ;; *) args="$args --hours $IN_HOURS" ;; esac
+          python3 build.py $args
