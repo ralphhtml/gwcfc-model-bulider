@@ -11,7 +11,9 @@ to the server, which only stores them and hands them out.
 
 ## How it works
 
-- `.github/workflows/build.yml` runs on a schedule and calls `build.py`.
+- `schedule.json` is the timetable: when each model's runs start and how long after that the whole run is out.
+- `clock.py` (`.github/workflows/clock.yml`) checks the timetable every 5 minutes and starts a model's build the moment its run is published.
+- `.github/workflows/build.yml` builds the runs the clock names, by calling `build.py`.
 - `build.py` finds the newest complete run, asks the server whether it already has it, draws it, and uploads it in signed parts.
 - `pipeline.bin` is the parsing server's own drawing code, encrypted (AES-256). It is not readable from this
   repository: a build unlocks it with a key derived from a repository secret.

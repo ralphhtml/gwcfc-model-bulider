@@ -1,0 +1,44 @@
+name: Clock
+
+# Starts each model's build when its run is out (schedule.json), and the other jobs on their periods.
+# One job that runs for a few hours and starts its successor before it ends. GitHub's own timer below is only a
+# second way to get it going again if the chain is ever broken.
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["trigger/clock"]
+
+permissions:
+  contents: read
+  actions: write
+
+# One clock at a time. One started while another runs waits for it to end, then takes over.
+concurrency:
+  group: clock
+  cancel-in-progress: false
+
+jobs:
+  clock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - name: Tick every 5 minutes
+        env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 clock.py --loop 320
+      - name: Start the next clock
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run clock.yml --ref main

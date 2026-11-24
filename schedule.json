@@ -1,0 +1,36 @@
+{
+  "_about": "When each model's runs start (UTC hours) and how many minutes after that the whole run is usually out. The clock (clock.py) starts looking for a run 20 minutes before that and starts its build the moment the last forecast hour is published. Times: wethr.net/model-schedule (measured arrival times), Wetterzentrale and WeatherBell posting windows, ECMWF's open data notes; the rest are this project's own measured lags. NAM, NAM Nest, HREF and SREF are not here: NOAA retired them on 2026-11-03 (SCN 26-47), replaced by RRFS and REFS.",
+  "max_at_once": 5,
+  "models": [
+    {"t": "hrrr/conus",         "cycles": "hourly",       "ready_min": 85},
+    {"t": "hrrrsub/conus",      "cycles": "hourly",       "ready_min": 90},
+    {"t": "rtma/conus",         "cycles": "hourly",       "ready_min": 45},
+    {"t": "rap/conus",          "cycles": "hourly",       "ready_min": 102},
+    {"t": "nbm/conus",          "cycles": [0, 6, 12, 18], "ready_min": 131},
+    {"t": "rrfs/conus",         "cycles": [0, 6, 12, 18], "ready_min": 180},
+    {"t": "gfs/conus",          "cycles": [0, 6, 12, 18], "ready_min": 299},
+    {"t": "gfs/world",          "cycles": [0, 6, 12, 18], "ready_min": 299},
+    {"t": "iconeu/conus",       "cycles": [0, 6, 12, 18], "ready_min": 237},
+    {"t": "rdps/conus",         "cycles": [0, 6, 12, 18], "ready_min": 240},
+    {"t": "woofnam/conus",      "cycles": [0, 6, 12, 18], "ready_min": 300},
+    {"t": "aigfs/conus",        "cycles": [0, 6, 12, 18], "ready_min": 300},
+    {"t": "aigefs/conus",       "cycles": [0, 6, 12, 18], "ready_min": 300},
+    {"t": "gem/conus",          "cycles": [0, 12],        "ready_min": 334},
+    {"t": "gefs/conus",         "cycles": [0, 6, 12, 18], "ready_min": 366},
+    {"t": "gefsspr/conus",      "cycles": [0, 6, 12, 18], "ready_min": 366},
+    {"t": "gefs0p25/conus",     "cycles": [0, 6, 12, 18], "ready_min": 366},
+    {"t": "iconeps/conus",      "cycles": [0, 12],        "ready_min": 360},
+    {"t": "ecmwfaifs/conus",    "cycles": [0, 12],        "ready_min": 420},
+    {"t": "ukmo/conus",         "cycles": [0, 12],        "ready_min": 461},
+    {"t": "ecmwf/conus",        "cycles": [0, 12],        "ready_min": 475},
+    {"t": "ecmwf/world",        "cycles": [0, 12],        "ready_min": 475},
+    {"t": "cmce/conus",         "cycles": [0, 12],        "ready_min": 480},
+    {"t": "naefs/conus",        "cycles": [0, 12],        "ready_min": 480},
+    {"t": "ecmwfens/conus",     "cycles": [0, 12],        "ready_min": 540},
+    {"t": "ecmwfaifsens/conus", "cycles": [0, 12],        "ready_min": 540}
+  ],
+  "jobs": [
+    {"workflow": "fields.yml",   "every_min": 30},
+    {"workflow": "cyclones.yml", "every_min": 60}
+  ]
+}

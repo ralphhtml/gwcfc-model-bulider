@@ -1,24 +1,16 @@
 name: Build models
 
-# On a schedule and by hand only. Never on pull requests: code from a fork must not see the secrets.
+# Started by the clock (clock.yml) with the runs to build, or by hand. Never on pull requests: code from a fork
+# must not see the secrets.
 on:
-  schedule:
-    - cron: "12,42 * * * *"
-  # A push that changes trigger/now starts a build too (a way to start one without the Run workflow button).
-  # Only pushes to this repository's own main branch: a fork's pull request never runs this.
+  # A push that changes trigger/now builds whatever is due (a way to start one without the Run workflow button).
   push:
     branches: [main]
     paths: ["trigger/now"]
   workflow_dispatch:
     inputs:
-      model:
-        description: "Model (empty: every model)"
-        default: ""
-      region:
-        description: "Region"
-        default: "conus"
-      run:
-        description: "Run, YYYYMMDD_HH (empty: the newest complete run)"
+      targets:
+        description: 'What to build, e.g. [{"t":"hrrr/conus","run":"20261124_02"}] (empty: everything that is due)'
         default: ""
       hours:
         description: "Only these forecast hours, e.g. 0,1,2 (empty: all)"
@@ -28,50 +20,53 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      targets: ${{ steps.p.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: inputs.targets == ''
+        with:
+          python-version: "3.12"
+          cache: pip
+      - if: inputs.targets == ''
+        run: pip install -q -r requirements.txt
+      - id: p
+        env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          IN_TARGETS: ${{ inputs.targets }}
+        run: |
+          if [ -z "$IN_TARGETS" ]; then IN_TARGETS="$(python3 clock.py --once | tail -1)"; export IN_TARGETS; fi
+          # Only well-formed entries get through: a model region and a run, nothing else.
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os, re
+          try:
+              rows = json.loads(os.environ.get("IN_TARGETS") or "[]")
+          except ValueError:
+              rows = []
+          ok = [{"t": r["t"], "run": r["run"]} for r in rows if isinstance(r, dict)
+                and re.fullmatch(r"[a-z0-9]{1,24}/[a-z0-9]{1,24}", str(r.get("t", "")))
+                and re.fullmatch(r"\d{8}_\d{2}", str(r.get("run", "")))][:40]
+          print("targets=" + json.dumps(ok, separators=(",", ":")))
+          PY
+
   build:
+    needs: plan
+    if: needs.plan.outputs.targets != '[]' && needs.plan.outputs.targets != ''
+    name: build ${{ matrix.t }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     strategy:
       fail-fast: false
-      # Four at a time: the server's tunnel carries about 3 MB a second in all, and it has little processor.
-      max-parallel: 4
       matrix:
-        # One job a model region. A model listed here must also be in pi/github-models.txt on the server.
-        target:
-          - "hrrr/conus"
-          - "rap/conus"
-          - "hrrrsub/conus"
-          - "rtma/conus"
-          - "gfs/conus"
-          - "gfs/world"
-          - "ecmwf/conus"
-          - "ecmwf/world"
-          - "ecmwfaifs/conus"
-          - "aigfs/conus"
-          - "nam/conus"
-          - "namnest/conus"
-          - "nbm/conus"
-          - "href/conus"
-          - "rrfs/conus"
-          - "woofnam/conus"
-          - "gem/conus"
-          - "rdps/conus"
-          - "iconeu/conus"
-          - "ukmo/conus"
-          - "gefs/conus"
-          - "gefsspr/conus"
-          - "cmce/conus"
-          - "ecmwfens/conus"
-          - "ecmwfaifsens/conus"
-          - "naefs/conus"
-          - "gefs0p25/conus"
-          - "iconeps/conus"
-          - "sref/conus"
-          - "hrefpmmn/conus"
-          - "aigefs/conus"
+        include: ${{ fromJson(needs.plan.outputs.targets) }}
     # One build of a model at a time: a run still being drawn is finished, the next start waits.
     concurrency:
-      group: build-${{ matrix.target }}
+      group: build-${{ matrix.t }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -84,17 +79,12 @@ jobs:
         env:
           GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
           GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
-          IN_MODEL: ${{ inputs.model }}
-          IN_REGION: ${{ inputs.region }}
-          IN_RUN: ${{ inputs.run }}
           IN_HOURS: ${{ inputs.hours }}
-          TARGET: ${{ matrix.target }}
+          TARGET: ${{ matrix.t }}
+          RUN: ${{ matrix.run }}
         run: |
-          # Started by hand for one model: only that model's job does anything.
-          if [ -n "$IN_MODEL" ] && [ "$IN_MODEL/${IN_REGION:-conus}" != "$TARGET" ]; then echo "not this job"; exit 0; fi
           model="${TARGET%%/*}"
           region="${TARGET##*/}"
-          args="--model $model --region $region"
-          case "$IN_RUN" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9]) args="$args --run $IN_RUN" ;; esac
+          args="--model $model --region $region --run $RUN"
           case "$IN_HOURS" in *[!0-9,]*|"") ;; *) args="$args --hours $IN_HOURS" ;; esac
           python3 build.py $args
