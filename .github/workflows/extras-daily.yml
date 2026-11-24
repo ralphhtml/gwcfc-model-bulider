@@ -1,8 +1,7 @@
 name: Daily jobs, every six hours
 
-# The tornado archive, Hurritrack, the climate normals and the sea surface temperature. Started by the clock.
-# Same concurrency group as the half-hourly small jobs, so the two never run at once: no extra job against the
-# account limit of twenty.
+# The tornado archive, Hurritrack, the climate normals and the sea surface temperature.
+# Only for starting them by hand (push trigger/daily): on the timetable they run inside the half-hourly job.
 on:
   workflow_dispatch:
   push:
@@ -17,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
-      group: extras-slow
+      group: extras-daily
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4

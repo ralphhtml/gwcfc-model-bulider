@@ -13,7 +13,7 @@ permissions:
 jobs:
   slow:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 110
     concurrency:
       group: extras-slow
       cancel-in-progress: false
@@ -27,4 +27,11 @@ jobs:
       - env:
           GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
           GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
-        run: python3 extras.py --group slow
+        run: |
+          python3 extras.py --group slow
+          # Four times a day (the half hour after 05, 11, 17 and 23 UTC) the daily jobs follow in this same job: the
+          # tornado archive, Hurritrack, the climate normals and the sea surface temperature. In one job, not a
+          # workflow of their own, so they never wait behind (or cancel) a half-hourly run, and add no job.
+          if [ $((10#$(date -u +%H) % 6)) -eq 5 ] && [ $((10#$(date -u +%M))) -ge 30 ]; then
+            python3 extras.py --group daily
+          fi
