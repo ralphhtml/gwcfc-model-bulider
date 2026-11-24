@@ -12,8 +12,8 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Model (hrrr)"
-        default: "hrrr"
+        description: "Model (empty: every model)"
+        default: ""
       region:
         description: "Region"
         default: "conus"
@@ -30,11 +30,45 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 330
     strategy:
       fail-fast: false
+      # Four at a time: the server's tunnel carries about 3 MB a second in all, and it has little processor.
+      max-parallel: 4
       matrix:
-        target: ["hrrr/conus"]
+        # One job a model region. A model listed here must also be in pi/github-models.txt on the server.
+        target:
+          - "hrrr/conus"
+          - "rap/conus"
+          - "hrrrsub/conus"
+          - "rtma/conus"
+          - "gfs/conus"
+          - "gfs/world"
+          - "ecmwf/conus"
+          - "ecmwf/world"
+          - "ecmwfaifs/conus"
+          - "aigfs/conus"
+          - "nam/conus"
+          - "namnest/conus"
+          - "nbm/conus"
+          - "href/conus"
+          - "rrfs/conus"
+          - "woofnam/conus"
+          - "gem/conus"
+          - "rdps/conus"
+          - "iconeu/conus"
+          - "ukmo/conus"
+          - "gefs/conus"
+          - "gefsspr/conus"
+          - "cmce/conus"
+          - "ecmwfens/conus"
+          - "ecmwfaifsens/conus"
+          - "naefs/conus"
+          - "gefs0p25/conus"
+          - "iconeps/conus"
+          - "sref/conus"
+          - "hrefpmmn/conus"
+          - "aigefs/conus"
     # One build of a model at a time: a run still being drawn is finished, the next start waits.
     concurrency:
       group: build-${{ matrix.target }}
@@ -56,8 +90,10 @@ jobs:
           IN_HOURS: ${{ inputs.hours }}
           TARGET: ${{ matrix.target }}
         run: |
-          model="${IN_MODEL:-${TARGET%%/*}}"
-          region="${IN_REGION:-${TARGET##*/}}"
+          # Started by hand for one model: only that model's job does anything.
+          if [ -n "$IN_MODEL" ] && [ "$IN_MODEL/${IN_REGION:-conus}" != "$TARGET" ]; then echo "not this job"; exit 0; fi
+          model="${TARGET%%/*}"
+          region="${TARGET##*/}"
           args="--model $model --region $region"
           case "$IN_RUN" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9]) args="$args --run $IN_RUN" ;; esac
           case "$IN_HOURS" in *[!0-9,]*|"") ;; *) args="$args --hours $IN_HOURS" ;; esac

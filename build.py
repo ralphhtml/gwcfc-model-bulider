@@ -182,6 +182,17 @@ def main(argv=None):
     else:
         date_str, cyc = G.cycle_for(m)
         date_str, cyc = G.freshest_cycle(m, date_str, cyc, key=f"{a.model}/{a.region}")
+        # The newest run that is all there: a run still arriving is left for a later start, and the one before it
+        # is built instead if the server does not have it.
+        from datetime import datetime, timedelta
+        for _ in range(4):
+            if G.run_is_complete(m, date_str, cyc):
+                break
+            t = datetime.strptime(date_str + cyc, "%Y%m%d%H") - timedelta(hours=int(m.get("cycle_h") or 6))
+            date_str, cyc = t.strftime("%Y%m%d"), t.strftime("%H")
+        else:
+            print(f"::notice::{a.model}/{a.region}: no complete run in the last few cycles; nothing to do", flush=True)
+            return 0
     run = f"{date_str}_{cyc}"
     if not a.dry and not a.force and server_has(base, a.model, a.region, run):
         log(f"{a.model}/{a.region} {run}: the server already has it whole; nothing to do")
@@ -196,8 +207,8 @@ def main(argv=None):
     man = G._build_model(a.model, m0, a.region, run=(date_str, cyc))
     run_dir = os.path.join(G.OUT_DIR, a.model, a.region, run)
     if not man or man.get("run") != run or not os.path.exists(os.path.join(run_dir, "manifest.json")):
-        log(f"{a.model}/{a.region} {run}: nothing was built (not published yet?)")
-        return 1
+        print(f"::notice::{a.model}/{a.region} {run}: nothing was built (not published yet?)", flush=True)
+        return 0
     files = [n for n in os.listdir(run_dir) if not n.startswith(".") and os.path.isfile(os.path.join(run_dir, n))]
     size = sum(os.path.getsize(os.path.join(run_dir, n)) for n in files)
     log(f"built {len(man.get('hours') or [])} hours, {len(man.get('fields') or {})} products, {len(files)} files, "
