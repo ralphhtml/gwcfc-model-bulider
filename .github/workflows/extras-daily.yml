@@ -1,0 +1,32 @@
+name: Daily jobs, every six hours
+
+# The tornado archive, Hurritrack, the climate normals and the sea surface temperature. Started by the clock.
+# Same concurrency group as the half-hourly small jobs, so the two never run at once: no extra job against the
+# account limit of twenty.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["trigger/daily"]
+
+permissions:
+  contents: read
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: extras-slow
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+        run: python3 extras.py --group daily

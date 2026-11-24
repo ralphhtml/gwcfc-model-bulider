@@ -33,10 +33,27 @@ JOBS = {
     "satwinds":    ("feeds", "satwinds_pipeline.py", [], False),
     "wind":        ("wind", "wind_field_pipeline.py", [], True),
     "ace":         ("ace", "ace_pipeline.py", [], True),
+    # The hurricane hunters: the live flights, and the archive a slice at a time (days.json says which days are done).
+    "recon":       ("recon", "recon_pipeline.py", [], True),
+    # NHC's cones: also needs the files of the storms still being added to (seed_cones).
+    "nhccones":    ("nhccones", "nhc_cones_pipeline.py", [], True),
+    # Both do nothing unless their source has changed since the stamp in the files fetched first.
+    "tornadoes":   ("tornadoes", "tornado_archive_pipeline.py", [], True),
+    "hurritrack":  ("hurritrack", "hurritrack_pipeline.py", [], True),
+    # One file that never changes: built only if the server does not have it.
+    "climo":       ("climo", "climo_build.py", [], False),
+    # The ocean: the days the server already has are stood in for by placeholders (seed_sst), so only new ones are drawn.
+    "sst":         ("sst", "sst_pipeline.py", ["--budget", "1500"], True),
 }
+ENV = {
+    "nhccones": {"NHCCONES_BUILDER": "1"},
+    "sst": {"GWCFC_SST_PRUNE_PCT": "101"},
+}
+ONCE = {"climo": "ncep_1991_2020.npz"}
 GROUPS = {
-    "quick": [("glm", 120), ("tropx", 600), ("stormsat", 600)],
-    "slow":  [("wafflehouse", 0), ("spaghetti", 0), ("satwinds", 0), ("wind", 0), ("ace", 0)],
+    "quick": [("glm", 120), ("tropx", 600), ("stormsat", 600), ("recon", 600)],
+    "slow":  [("wafflehouse", 0), ("spaghetti", 0), ("satwinds", 0), ("wind", 0), ("ace", 0), ("nhccones", 0)],
+    "daily": [("tornadoes", 0), ("hurritrack", 0), ("climo", 0), ("sst", 0)],
 }
 OK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,120}\.(png|json|webp|npz|csv|geojson)$")
 OK_DIR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,60}$")
@@ -76,6 +93,64 @@ def seed_top(base, tree, root, sent):
             fh.write(r.content)
         sent[name] = hashlib.sha256(r.content).hexdigest()
         n += 1
+    return n
+
+
+def _get(url):
+    import requests
+    try:
+        r = requests.get(url, timeout=90, headers={"User-Agent": "gwcfc-model-builder"})
+        return r.content if r.status_code == 200 else None
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def seed_cones(base, root, sent):
+    """The cone files of the storms not finished yet (the ones this run may add advisories to)."""
+    try:
+        with open(os.path.join(root, "state.json")) as fh:
+            state = json.load(fh)
+        with open(os.path.join(root, "index.json")) as fh:
+            ids = [r["id"] for r in json.load(fh).get("storms") or []]
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+    os.makedirs(os.path.join(root, "storms"), exist_ok=True)
+    n = 0
+    for sid in ids:
+        if (state.get(sid) or {}).get("done") or not OK_DIR.match(str(sid)):
+            continue
+        body = _get(f"{base}/nhccones/storms/{sid}.json")
+        if body:
+            with open(os.path.join(root, "storms", sid + ".json"), "wb") as fh:
+                fh.write(body)
+            sent[f"storms/{sid}.json"] = hashlib.sha256(body).hexdigest()
+            n += 1
+    return n
+
+
+def seed_sst(root, sent):
+    """A placeholder for every picture the server's list names, so the program skips those days and its list keeps
+    them. Placeholders are never uploaded."""
+    try:
+        with open(os.path.join(root, "index.json")) as fh:
+            srcs = json.load(fh).get("sources") or {}
+    except (OSError, ValueError):
+        return 0
+    stub = b"\0" * 2048
+    h = hashlib.sha256(stub).hexdigest()
+    n = 0
+    for source, e in srcs.items():
+        for variant, v in (e.get("variants") or {}).items():
+            if not (OK_DIR.match(source) and OK_DIR.match(variant)):
+                continue
+            d = os.path.join(root, source, variant)
+            os.makedirs(d, exist_ok=True)
+            for stamp in v.get("frames") or []:
+                if re.fullmatch(r"\d{8}", str(stamp)) and not os.path.exists(os.path.join(d, stamp + ".png")):
+                    with open(os.path.join(d, stamp + ".png"), "wb") as fh:
+                        fh.write(stub)
+                    sent[f"{source}/{variant}/{stamp}.png"] = h
+                    n += 1
     return n
 
 
@@ -134,17 +209,26 @@ def run_job(name, base, key_path, code_dir, state, dry):
     if want_seed and not state.get("seeded-" + tree) and base:
         n = seed_top(base, tree, root, sent)
         state["seeded-" + tree] = True
+        if name == "nhccones":
+            n += seed_cones(base, root, sent)
+        if name == "sst":
+            n += seed_sst(root, sent)
         log(f"{name}: started from {n} of the server's files")
+    if name in ONCE and base and _get(f"{base}/{tree}/{ONCE[name]}"):
+        log(f"{name}: the server has it, nothing to build")
+        if not dry:
+            upload(base, key_path, tree, root, name, [], sent)
+        return True
     t0 = time.time()
-    env = dict(os.environ, GWCFC_NO_UPLOADS="1", PYTHONPATH=code_dir, PIP_NO_INDEX="1")
+    env = dict(os.environ, GWCFC_NO_UPLOADS="1", PYTHONPATH=code_dir, PIP_NO_INDEX="1", **ENV.get(name, {}))
     try:
         r = subprocess.run([sys.executable, os.path.join(code_dir, prog)] + args, cwd=code_dir, env=env,
-                           capture_output=True, text=True, timeout=1500)
+                           capture_output=True, text=True, timeout=2400 if name == "sst" else 1500)
         tail = (r.stdout or "").strip().splitlines()[-1:] or (r.stderr or "").strip().splitlines()[-1:]
         note = (tail[0][:160] if tail else "") if "http" not in (tail[0].lower() if tail else "") else ""
         ran = r.returncode == 0
     except subprocess.TimeoutExpired:
-        ran, note = False, "stopped after 25 minutes"
+        ran, note = False, "stopped: it ran out of time"
     files = changed(root, sent)
     log(f"{name}: {'ran' if ran else 'FAILED'} in {time.time() - t0:.0f}s, {len(files)} new or changed files. {note}")
     if dry:

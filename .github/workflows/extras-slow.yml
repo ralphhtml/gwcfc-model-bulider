@@ -1,6 +1,6 @@
 name: Small jobs, every half hour
 
-# The Waffle House Index, spaghetti plots, satellite winds, the wind field and ACE. Started by the clock.
+# The Waffle House Index, spaghetti plots, satellite winds, the wind field, ACE and the NHC cone archive. Started by the clock.
 on:
   workflow_dispatch:
   push:
