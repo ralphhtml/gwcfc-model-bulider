@@ -32,6 +32,8 @@ JOBS = {
                                "aifs-ens/latest.json"]),
     "cyclones": ("cyclones", ["latest.json"]),
     "soundings": ("soundings", ["manifest.json", "state.json"]),
+    # Not a folder of data: the ECMWF weeklies are model runs, uploaded as such; this is only where the job checks in.
+    "weeklies": ("checkins", []),
 }
 ENS_MODELS = ["gefs", "geps", "sref", "gfs", "ecmwf", "ecmwfens"]
 for _m in ENS_MODELS:
@@ -250,6 +252,71 @@ def run_soundings(base, root, seeded):
     return {"keep_hours": sp.KEEP_HOURS} if built else {"no_commit": True}
 
 
+def run_weeklies(base, key):
+    """The ECMWF weeklies and seasonal: each is a model run of its own, uploaded the way build.py uploads one.
+    Returns False when nothing could be asked of ECMWF at all (then there is no check-in)."""
+    import gfs_pipeline as G
+    import ecmwf_weeklies as W
+    import requests
+    todo = [(W.NAME, W.OUT, W.build), (W.SEAS_NAME, W.SEAS_OUT, W.build_seasonal)]
+    # What the server has: its newest run's manifest, put where the job looks, so a run it has whole is not drawn
+    # again. Only the manifest: a run it has in part is drawn afresh.
+    theirs = {}
+    for name, out, _fn in todo:
+        try:
+            idx = requests.get(f"{base}/models/{name}/index.json", timeout=60).json()["regions"][W.REGION]
+            man = requests.get(f"{base}/models/{name}/{W.REGION}/{idx['run']}/manifest.json", timeout=60).json()
+            theirs[name] = (idx["run"], len(man.get("fields") or {}), bool(man.get("partial")))
+        except Exception:                               # noqa: BLE001
+            theirs[name] = ("", 0, True)
+    fd, key_path = tempfile.mkstemp(prefix="k-")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(key.strip() + "\n")
+    os.chmod(key_path, 0o600)
+    asked = False
+    for name, out, fn in todo:
+        t_run, t_fields, t_part = theirs[name]
+        try:
+            newest = (W.newest_run(W.FIELDS["wkt2a"]["product"]) if name == W.NAME
+                      else W.seasonal_run(next(iter(W.SEAS_FIELDS.values()))["product"]))[0]
+        except Exception as e:                          # noqa: BLE001
+            log(f"{name}: could not ask ECMWF for its newest run: {e.__class__.__name__}")
+            continue
+        if not newest:
+            log(f"{name}: ECMWF has no run drawn right now")
+            asked = True
+            continue
+        asked = True
+        run = newest.strftime("%Y%m%d_00")
+        if run == t_run and not t_part and t_fields:
+            log(f"{name}: the server has {run} whole")
+            continue
+        try:
+            fn()
+        except Exception as e:                          # noqa: BLE001
+            log(f"{name}: {e.__class__.__name__}: {str(e)[:200]}")
+            continue
+        run_dir = os.path.join(out, run)
+        try:
+            with open(os.path.join(run_dir, "manifest.json")) as fh:
+                man = json.load(fh)
+        except (OSError, ValueError):
+            log(f"{name}: nothing was built")
+            continue
+        if man.get("partial") or (run == t_run and len(man.get("fields") or {}) < t_fields):
+            log(f"{name}: {run} came out with {len(man.get('fields') or {})} products, fewer than the server's; kept back")
+            continue
+        files = [n for n in os.listdir(run_dir) if not n.startswith(".") and os.path.isfile(os.path.join(run_dir, n))]
+        n_parts = 0
+        for i, names in enumerate(B.parts(run_dir)):
+            B.post(base, key_path, name, W.REGION, run, "part", i, B.tar_of(run_dir, names))
+            n_parts += 1
+        got = B.post(base, key_path, name, W.REGION, run, "commit", n_parts, json.dumps({"files": len(files)}).encode())
+        log(f"{name}: uploaded {run}, {got.get('files')} files")
+    os.unlink(key_path)
+    return asked
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--job", required=True, choices=sorted(JOBS))
@@ -274,6 +341,8 @@ def main(argv=None):
         extra = run_ens(base, root, seeded, a.job[4:]) or {}
     elif a.job == "soundings":
         extra = run_soundings(base, root, seeded) or {}
+    elif a.job == "weeklies":
+        extra = {} if (a.dry or run_weeklies(base, key)) else {"no_commit": True}
     else:
         (run_cyclone if a.job == "cyclone" else run_cyclones)(base, root, seeded)
     rels_out = changed(root, seeded)

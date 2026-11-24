@@ -28,6 +28,7 @@ import build as B
 HERE = os.path.dirname(os.path.abspath(__file__))
 EARLY_MIN = 20          # start asking this long before the timetable's time
 TICK_S = 300
+RECHECK_S = 540         # a run found not out yet is asked about again after this long
 REDO_MIN = 25           # the same model is not started again within this long (a build that failed is retried then)
 API = "https://api.github.com"
 
@@ -54,10 +55,11 @@ def load(repo=""):
 def runs_due(entry, now):
     """The two newest runs of a model whose time to look has come, newest first, as (date, cyc) pairs."""
     cycles = list(range(24)) if entry["cycles"] == "hourly" else sorted(entry["cycles"])
+    weekday = entry.get("weekday")                      # a model that runs once a week (0 is Monday)
     t = (now - timedelta(minutes=max(0, entry["ready_min"] - EARLY_MIN))).replace(minute=0, second=0, microsecond=0)
     out = []
-    for _ in range(72):
-        if t.hour in cycles:
+    for _ in range(24 * 16 if weekday is not None else 96):
+        if t.hour in cycles and (weekday is None or t.weekday() == weekday):
             out.append((t.strftime("%Y%m%d"), f"{t.hour:02d}"))
             if len(out) == 2:
                 break
@@ -65,30 +67,54 @@ def runs_due(entry, now):
     return out
 
 
-def due(sched, base, G, now, complete_cache):
-    """[{t, run}] to build now: for each model, the newest published run the server does not have."""
-    out = []
-    for e in sched["models"]:
-        model, region = e["t"].split("/")
-        if model not in G.MODELS:
-            continue
-        m = G.region_spec(G.MODELS[model], region)
-        for date_str, cyc in runs_due(e, now):
-            run = f"{date_str}_{cyc}"
-            if B.server_has(base, model, region, run):
-                break                                   # the server has this one: nothing older is wanted
-            key = (e["t"], run)
-            if key not in complete_cache:
-                try:
-                    ok = bool(G.run_is_complete(m, date_str, cyc))
-                except Exception:                       # noqa: BLE001
-                    ok = False
-                if ok:
-                    complete_cache[key] = True
-            if complete_cache.get(key):
-                out.append({"t": e["t"], "run": run})
-                break
+def listed(base):
+    """{"model/region": run} of the runs the server's index lists as whole, in one request."""
+    import requests
+    try:
+        r = requests.get(base + "/models/latest.json", timeout=90, headers={"User-Agent": "gwcfc-model-builder"})
+        models = r.json().get("models") or {}
+    except Exception:                                   # noqa: BLE001
+        return {}
+    out = {}
+    for name, m in models.items():
+        for region, e in (m.get("regions") or {}).items():
+            if e.get("run") and not e.get("partial"):
+                out[f"{name}/{region}"] = e["run"]
     return out
+
+
+def _one(e, base, G, now, cache, have):
+    model, region = e["t"].split("/")
+    if model not in G.MODELS:
+        return None
+    m = G.region_spec(G.MODELS[model], region)
+    for date_str, cyc in runs_due(e, now):
+        run = f"{date_str}_{cyc}"
+        if have.get(e["t"]) == run or B.server_has(base, model, region, run):
+            return None                                 # the server has this one: nothing older is wanted
+        key = (e["t"], run)
+        hit = cache.get(key)
+        if hit is True:
+            return {"t": e["t"], "run": run}
+        if isinstance(hit, float) and time.time() - hit < RECHECK_S:
+            continue                                    # asked a few minutes ago: not out yet
+        try:
+            ok = bool(G.run_is_complete(m, date_str, cyc))
+        except Exception:                               # noqa: BLE001
+            ok = False
+        cache[key] = True if ok else time.time()
+        if ok:
+            return {"t": e["t"], "run": run}
+    return None
+
+
+def due(sched, base, G, now, complete_cache):
+    """[{t, run}] to build now: for each model region, the newest published run the server does not have."""
+    from concurrent.futures import ThreadPoolExecutor
+    have = listed(base)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        got = list(ex.map(lambda e: _one(e, base, G, now, complete_cache, have), sched["models"]))
+    return [d for d in got if d]
 
 
 def gh(method, path, token, **kw):
@@ -170,6 +196,9 @@ def main(argv=None):
             busy = building(repo, token)
             room = cap - len(busy)
             go = []
+            # The ones that have waited longest go first, so the models that come round every hour do not take every
+            # free place from the ones that come round every six.
+            want.sort(key=lambda d: last.get(d["t"], 0))
             for d in want:
                 if d["t"] in busy or t0 - last.get(d["t"], 0) < REDO_MIN * 60:
                     continue
