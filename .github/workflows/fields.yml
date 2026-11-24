@@ -21,7 +21,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ["gefs", "geps", "sref", "gfs", "ecmwf", "ecmwfens"]
+        # SREF is not here: NOAA retired it on 2026-11-03.
+        model: ["gefs", "geps", "gfs", "ecmwf", "ecmwfens"]
     concurrency:
       group: ens-${{ matrix.model }}
       cancel-in-progress: false
