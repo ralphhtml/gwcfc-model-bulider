@@ -44,6 +44,9 @@ JOBS = {
     "climo":       ("climo", "climo_build.py", [], False),
     # The ocean: the days the server already has are stood in for by placeholders (seed_sst), so only new ones are drawn.
     "sst":         ("sst", "sst_pipeline.py", ["--budget", "1500"], True),
+    # The other countries' radars (UK, Israel, Australia, Taiwan, Portugal, Cuba, Bermuda, the Dominican Republic,
+    # Jamaica, India), the buoys and the Saharan dust text. The alert history stays on the server.
+    "feeds":       ("feeds", "feeds_pipeline.py", [], True),
 }
 ENV = {
     "nhccones": {"NHCCONES_BUILDER": "1"},
@@ -51,11 +54,11 @@ ENV = {
 }
 ONCE = {"climo": "ncep_1991_2020.npz"}
 GROUPS = {
-    "quick": [("glm", 120), ("tropx", 600), ("stormsat", 600), ("recon", 600)],
+    "quick": [("glm", 120), ("tropx", 600), ("stormsat", 600), ("recon", 600), ("feeds", 600)],
     "slow":  [("wafflehouse", 0), ("spaghetti", 0), ("satwinds", 0), ("wind", 0), ("ace", 0), ("nhccones", 0)],
     "daily": [("tornadoes", 0), ("hurritrack", 0), ("climo", 0), ("sst", 0)],
 }
-OK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,120}\.(png|json|webp|npz|csv|geojson)$")
+OK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,120}\.(png|json|webp|npz|csv|geojson|gif|u8\.gz)$")   # gif, u8.gz: the feeds radars
 OK_DIR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,60}$")
 PART_BYTES = 20 * 1024 * 1024
 
@@ -93,6 +96,44 @@ def seed_top(base, tree, root, sent):
             fh.write(r.content)
         sent[name] = hashlib.sha256(r.content).hexdigest()
         n += 1
+    return n
+
+
+# Folders of the feeds tree the builder must not send back: the alert history is added to on the server only.
+FEEDS_SKIP = ("alerts-hist",)
+
+
+def seed_feeds(base, root, sent):
+    """The radar pictures the server already has, folder by folder, so each country's loop carries on from them
+    (most of these sources only ever show their newest picture, and a loop is built up a picture at a time)."""
+    import requests
+    hdr = {"User-Agent": "gwcfc-model-builder"}
+    try:
+        page = requests.get(f"{base}/feeds/", timeout=60, headers=hdr).text
+    except Exception:                                   # noqa: BLE001
+        return 0
+    n = 0
+    for sub in re.findall(r'href="([A-Za-z0-9_-]+)/"', page):
+        if sub in FEEDS_SKIP:
+            continue
+        try:
+            listing = requests.get(f"{base}/feeds/{sub}/", timeout=60, headers=hdr).text
+        except Exception:                               # noqa: BLE001
+            continue
+        os.makedirs(os.path.join(root, sub), exist_ok=True)
+        for name in re.findall(r'href="([^"/?]+)"', listing)[:400]:
+            if not OK_NAME.match(name):
+                continue
+            try:
+                r = requests.get(f"{base}/feeds/{sub}/{name}", timeout=60, headers=hdr)
+            except Exception:                           # noqa: BLE001
+                continue
+            if r.status_code != 200 or len(r.content) > 8e6:
+                continue
+            with open(os.path.join(root, sub, name), "wb") as fh:
+                fh.write(r.content)
+            sent[f"{sub}/{name}"] = hashlib.sha256(r.content).hexdigest()
+            n += 1
     return n
 
 
@@ -213,6 +254,8 @@ def run_job(name, base, key_path, code_dir, state, dry):
             n += seed_cones(base, root, sent)
         if name == "sst":
             n += seed_sst(root, sent)
+        if name == "feeds":
+            n += seed_feeds(base, root, sent)
         log(f"{name}: started from {n} of the server's files")
     if name in ONCE and base and _get(f"{base}/{tree}/{ONCE[name]}"):
         log(f"{name}: the server has it, nothing to build")
