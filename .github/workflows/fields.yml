@@ -14,17 +14,13 @@ permissions:
 
 jobs:
   ens:
-    # Every member's fields of each ensemble, one ensemble a job. Each checks in every hour; it only builds when
-    # there is a run the server does not have whole.
+    # Every member's fields of each ensemble, one after another in one job (GitHub runs twenty jobs at a time for
+    # the whole account, and five jobs that mostly only check in were five of them). Each only builds when there is
+    # a run the server does not have whole.
     runs-on: ubuntu-latest
-    timeout-minutes: 300
-    strategy:
-      fail-fast: false
-      matrix:
-        # SREF is not here: NOAA retired it on 2026-11-03.
-        model: ["gefs", "geps", "gfs", "ecmwf", "ecmwfens"]
+    timeout-minutes: 330
     concurrency:
-      group: ens-${{ matrix.model }}
+      group: ens-fields
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -37,8 +33,9 @@ jobs:
         env:
           GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
           GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
-          MODEL: ${{ matrix.model }}
-        run: python3 tree.py --job "ens-$MODEL"
+        run: |
+          # SREF is not here: NOAA retired it on 2026-11-03.
+          for m in gfs ecmwf gefs geps ecmwfens; do python3 tree.py --job "ens-$m" || echo "::warning::ens-$m did not finish"; done
 
   soundings:
     # The hourly sounding picture of every upper-air site.
