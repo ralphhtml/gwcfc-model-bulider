@@ -115,6 +115,19 @@ def building(repo, token):
     return out
 
 
+def superseded(repo, token):
+    """Whether a newer clock is waiting for this one to end (started after a change to the code or by hand)."""
+    me = int(os.environ.get("GITHUB_RUN_ID") or 0)
+    for status in ("pending", "queued", "waiting", "requested"):
+        try:
+            r = gh("GET", f"/repos/{repo}/actions/workflows/clock.yml/runs?status={status}&per_page=20", token)
+            if any(int(x.get("id") or 0) > me for x in (r.json().get("workflow_runs") or [])):
+                return True
+        except Exception:                               # noqa: BLE001
+            pass
+    return False
+
+
 def start(repo, token, workflow, inputs=None):
     r = gh("POST", f"/repos/{repo}/actions/workflows/{workflow}/dispatches", token,
            json={"ref": "main", "inputs": inputs or {}})
@@ -170,6 +183,14 @@ def main(argv=None):
                 + (", ".join(f"{d['t']} {d['run']}" for d in go) or "-"))
         except Exception as e:                          # noqa: BLE001
             log(f"tick failed: {e.__class__.__name__}")
+        if superseded(repo, token):
+            # It starts by itself when this job ends, so this one does not start a successor of its own.
+            log("a newer clock is waiting: handing over to it now")
+            out = os.environ.get("GITHUB_OUTPUT")
+            if out:
+                with open(out, "a") as fh:
+                    fh.write("handover=no\n")
+            break
         if time.time() + TICK_S > end:
             break
         time.sleep(max(5, TICK_S - (time.time() - t0)))

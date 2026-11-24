@@ -17,7 +17,7 @@ permissions:
 
 # One clock at a time. One started while another runs waits for it to end, then takes over.
 concurrency:
-  group: clock
+  group: clock-2
   cancel-in-progress: false
 
 jobs:
@@ -32,13 +32,14 @@ jobs:
           cache: pip
       - run: pip install -q -r requirements.txt
       - name: Tick every 5 minutes
+        id: tick
         env:
           GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
           GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 clock.py --loop 320
       - name: Start the next clock
-        if: success()
+        if: success() && steps.tick.outputs.handover != 'no'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run clock.yml --ref main
