@@ -1,0 +1,40 @@
+name: Cyclone and ensemble jobs
+
+# On a schedule and by hand only. Never on pull requests: code from a fork must not see the secrets.
+on:
+  schedule:
+    - cron: "27 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["trigger/cyclones"]
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        # cyclone: GEFS centres, ECMWF cyclone odds, GEPS and AIFS tracks, GFS and ECMWF lows (one after another,
+        # because they share one index of lows). cyclones: Google DeepMind's tracks.
+        job: ["cyclone", "cyclones"]
+    concurrency:
+      group: tree-${{ matrix.job }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - name: Run and upload
+        env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          JOB: ${{ matrix.job }}
+        run: python3 tree.py --job "$JOB"

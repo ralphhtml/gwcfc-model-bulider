@@ -3,3 +3,4 @@ scipy
 pillow
 requests
 eccodes
+h5py
