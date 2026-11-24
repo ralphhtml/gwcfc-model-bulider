@@ -78,7 +78,29 @@ def sign(msg, key_path):
         return fh.read()
 
 
+# The site's own store (store.php on the web host): every upload goes there too, so the site keeps its data when the
+# parsing server is gone. Its address is public (it is the site), so it is not a secret.
+STORE = (os.environ.get("GWCFC_STORE") or "https://radar.gwcfc.net/data").strip().rstrip("/")
+
+
 def post(base, key_path, model, region, run, kind, part, body, tries=6):
+    """Sent to the parsing server and to the site's store; fine when either one took it."""
+    bases = [b for b in dict.fromkeys([base, STORE]) if b]
+    out, errs = None, []
+    for b in bases:
+        try:
+            r = _post_one(b, key_path, model, region, run, kind, part, body, tries if b == bases[0] else 4)
+            out = out or r
+        except RuntimeError as e:
+            errs.append(("store" if b == STORE else "server") + ": " + str(e))
+    if out is None:
+        raise RuntimeError("; ".join(errs))
+    for e in errs:
+        print("::warning::" + e, flush=True)
+    return out
+
+
+def _post_one(base, key_path, model, region, run, kind, part, body, tries=6):
     import requests
     last = ""
     for n in range(tries):
@@ -129,8 +151,15 @@ def tar_of(run_dir, names):
 
 
 def server_has(base, model, region, run):
-    """Whether the server already has this run whole (so it is not built and sent again)."""
+    """Whether the server and the site's store both have this run whole (so it is not built and sent again). A server
+    that does not answer at all counts as having it: it is gone, and only the store matters then."""
+    return _has(base, model, region, run, gone_ok=True) and (not STORE or _has(STORE, model, region, run))
+
+
+def _has(base, model, region, run, gone_ok=False):
     import requests
+    if not base:
+        return gone_ok
     try:
         r = requests.get(f"{base}/models/{model}/{region}/{run}/manifest.json", timeout=60,
                          headers={"User-Agent": "gwcfc-model-builder"})
@@ -138,6 +167,8 @@ def server_has(base, model, region, run):
             return False
         man = r.json()
         return bool(man.get("fields")) and not man.get("partial")
+    except requests.ConnectionError:
+        return gone_ok
     except Exception:                                   # noqa: BLE001
         return False
 

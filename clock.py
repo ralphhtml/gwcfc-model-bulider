@@ -68,11 +68,28 @@ def runs_due(entry, now):
 
 
 def listed(base):
-    """{"model/region": run} of the runs the server's index lists as whole, in one request."""
+    """{"model/region": run} of the runs listed as whole by both the server and the site's store (B.STORE). A run one
+    of them is missing is built and sent again; a server that does not answer at all is left out."""
+    srv = _listed(base)
+    if not B.STORE:
+        return srv or {}
+    st = _listed(B.STORE)
+    if st is None:                  # the store is not answering (or not set up yet): the server's list decides
+        return srv or {}
+    if srv is None:
+        return st
+    return {k: v for k, v in srv.items() if st.get(k) == v}
+
+
+def _listed(base):
     import requests
     try:
         r = requests.get(base + "/models/latest.json", timeout=90, headers={"User-Agent": "gwcfc-model-builder"})
+        if r.status_code != 200:
+            return None
         models = r.json().get("models") or {}
+    except requests.ConnectionError:
+        return None
     except Exception:                                   # noqa: BLE001
         return {}
     out = {}
