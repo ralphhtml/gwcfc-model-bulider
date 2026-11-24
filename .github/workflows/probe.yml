@@ -1,0 +1,35 @@
+name: Probe
+
+# Lists public NOAA folders, to see what a model's files are called. No secrets.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["trigger/probe"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: |
+          N=https://nomads.ncep.noaa.gov/pub/data/nccf/com
+          ls1() { echo "== $1"; curl -s -m 60 -A gwcfc-model-builder "$1" | grep -o 'href="[^"?]*"' | sed 's/href=//' | tr -d '"' | grep -v '^/' | head -${2:-60} | tr '\n' ' '; echo; }
+          D=$(date -u -d '8 hours ago' +%Y%m%d)
+          ls1 $N/refs/ 20
+          ls1 $N/refs/prod/ 40
+          ls1 $N/refs/prod/refs.$D/ 40
+          ls1 $N/refs/prod/refs.$D/ensprod/ 200
+          for c in 00 06 12 18; do ls1 $N/refs/prod/refs.$D/$c/ 60; ls1 $N/refs/prod/refs.$D/$c/ensprod/ 120; ls1 $N/refs/prod/refs.$D/$c/enspost/ 120; done
+          ls1 $N/rrfs/ 20
+          ls1 $N/rrfs/prod/ 40
+          ls1 $N/rrfs/prod/rrfs.$D/ 40
+          ls1 $N/rrfs/prod/rrfs.$D/12/ 80
+          ls1 $N/rrfs/para/ 20
+          ls1 $N/nam/prod/ 10
+          ls1 $N/href/prod/ 10
+          ls1 $N/sref/prod/ 10
+          echo "== filters"; curl -s -m 60 -A gwcfc-model-builder https://nomads.ncep.noaa.gov/ | grep -o 'filter_[a-z0-9_]*\.pl' | sort -u | tr '\n' ' '
