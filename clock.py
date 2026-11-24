@@ -36,7 +36,17 @@ def log(msg):
     print(time.strftime("%H:%M:%S", time.gmtime()), msg, flush=True)
 
 
-def load():
+def load(repo=""):
+    """The timetable: the copy on the main branch when it can be read (so an edit to schedule.json is picked up by a
+    clock that is already running), else the one this job checked out."""
+    if repo:
+        try:
+            import requests
+            r = requests.get(f"https://raw.githubusercontent.com/{repo}/main/schedule.json", timeout=30)
+            if r.status_code == 200 and isinstance(r.json().get("models"), list):
+                return r.json()
+        except Exception:                               # noqa: BLE001
+            pass
     with open(os.path.join(HERE, "schedule.json")) as fh:
         return json.load(fh)
 
@@ -136,6 +146,8 @@ def main(argv=None):
         t0 = time.time()
         now = datetime.now(timezone.utc)
         try:
+            sched = load(repo)
+            cap = int(sched.get("max_at_once") or 5)
             for job in sched.get("jobs") or []:
                 if t0 - last.get(job["workflow"], 0) >= job["every_min"] * 60 - 30:
                     if start(repo, token, job["workflow"]):
