@@ -84,8 +84,10 @@ STORE = (os.environ.get("GWCFC_STORE") or "https://radar.gwcfc.net/data").strip(
 
 
 def post(base, key_path, model, region, run, kind, part, body, tries=6):
-    """Sent to the parsing server and to the site's store; fine when either one took it."""
-    bases = [b for b in dict.fromkeys([base, STORE]) if b]
+    """Sent to the site's store (and only there once it is set up: the parsing server is retired, and it answered every
+    part "the disk is too full" six times over with waits between, about three minutes a part, before the store was
+    asked at all, so one HRRR run took over an hour to upload, Nov 25, 2026). Without a store, to the server."""
+    bases = [STORE] if STORE else [base]
     out, errs = None, []
     for b in bases:
         try:
