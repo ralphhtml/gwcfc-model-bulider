@@ -118,7 +118,8 @@ def _post_one(base, key_path, model, region, run, kind, part, body, tries=6):
             if r.status_code == 200:
                 return r.json()
             last = f"HTTP {r.status_code} {r.text[:200]}"
-            if r.status_code in (400, 403, 409, 413):
+            # A body that arrived damaged (the host cut it short) is worth sending again; any other refusal is not.
+            if r.status_code in (400, 403, 409, 413) and "does not match its hash" not in r.text:
                 break                                   # refused: asking again will not change the answer
         except Exception as e:                          # noqa: BLE001
             last = e.__class__.__name__                 # the address is in the message, so only the kind is kept
