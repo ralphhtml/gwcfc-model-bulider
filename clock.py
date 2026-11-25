@@ -70,15 +70,12 @@ def runs_due(entry, now):
 def listed(base):
     """{"model/region": run} of the runs listed as whole by both the server and the site's store (B.STORE). A run one
     of them is missing is built and sent again; a server that does not answer at all is left out."""
-    srv = _listed(base)
-    if not B.STORE:
-        return srv or {}
-    st = _listed(B.STORE)
-    if st is None:                  # the store is not answering (or not set up yet): the server's list decides
-        return srv or {}
-    if srv is None:
-        return st
-    return {k: v for k, v in srv.items() if st.get(k) == v}
+    # With the store set up, its list alone decides (the parsing server is retired: see B.server_has).
+    if B.STORE:
+        st = _listed(B.STORE)
+        if st is not None:
+            return st
+    return _listed(base) or {}
 
 
 def _listed(base):
@@ -198,6 +195,7 @@ def main(argv=None):
         print(json.dumps(due(sched, base, G, datetime.now(timezone.utc), cache)))
         return 0
     cap = int(sched.get("max_at_once") or 5)
+    per_day = {e["t"]: (24 if e["cycles"] == "hourly" else len(e["cycles"])) for e in sched["models"]}
     last = {}                                           # model region or workflow -> when it was last started
     end = time.time() + a.loop * 60
     while True:
@@ -217,7 +215,10 @@ def main(argv=None):
             go = []
             # The ones that have waited longest go first, so the models that come round every hour do not take every
             # free place from the ones that come round every six.
-            want.sort(key=lambda d: last.get(d["t"], 0))
+            # Among those that have waited the same (every one, when a clock has just started), the models that come
+            # round most often go first: a new HRRR every hour is worth more than a sixth ensemble member, and in
+            # name order the hourly models waited behind a hundred others.
+            want.sort(key=lambda d: (last.get(d["t"], 0), -per_day.get(d["t"], 0)))
             for d in want:
                 if d["t"] in busy or t0 - last.get(d["t"], 0) < REDO_MIN * 60:
                     continue

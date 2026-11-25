@@ -151,9 +151,13 @@ def tar_of(run_dir, names):
 
 
 def server_has(base, model, region, run):
-    """Whether the server and the site's store both have this run whole (so it is not built and sent again). A server
-    that does not answer at all counts as having it: it is gone, and only the store matters then."""
-    return _has(base, model, region, run, gone_ok=True) and (not STORE or _has(STORE, model, region, run))
+    """Whether this run is already whole where the site reads it (so it is not built and sent again). With the site's
+    store set up, the store alone decides: the parsing server is retired (Nov 2026), and asking it too made a server
+    that answers with an error count every run as missing, so all 182 model regions were "due" at once and the hourly
+    models (HRRR, RAP) waited hours behind the ensembles. Without a store, the server decides as before."""
+    if STORE:
+        return _has(STORE, model, region, run)
+    return _has(base, model, region, run, gone_ok=True)
 
 
 def _has(base, model, region, run, gone_ok=False):
