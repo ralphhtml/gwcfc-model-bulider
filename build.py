@@ -142,6 +142,63 @@ def parts(run_dir):
         yield batch
 
 
+def _webp_one(path):
+    """One PNG as lossless WebP with every pixel kept exactly (exact=True keeps the colour of see-through pixels too,
+    which the page reads as data). The PNG goes once the WebP is written; any failure keeps the PNG."""
+    from PIL import Image
+    out = path[:-4] + ".webp"
+    try:
+        with Image.open(path) as im:
+            im.load()
+            im.save(out, "WEBP", lossless=True, quality=25, method=2, exact=True)
+        os.unlink(path)
+        return True
+    except Exception:                                   # noqa: BLE001
+        try:
+            os.unlink(out)
+        except OSError:
+            pass
+        return False
+
+
+def to_webp(run_dir):
+    """Every picture in a run as lossless WebP instead of PNG: the same pixels in about half the room, so the site's
+    store (one 20 GB hosting plan for everything) holds about twice as many runs (Nov 25, 2026). The manifest says
+    so with "ext": "webp" and its file patterns, and the page asks for .webp then; a run without it is read as PNG."""
+    from concurrent.futures import ProcessPoolExecutor
+    pngs = [os.path.join(run_dir, n) for n in os.listdir(run_dir) if n.endswith(".png")]
+    if not pngs:
+        return 0, 0
+    with ProcessPoolExecutor(max_workers=os.cpu_count() or 2) as ex:
+        ok = sum(ex.map(_webp_one, pngs, chunksize=16))
+    if ok != len(pngs):                                 # a run is all one kind: put back what was converted
+        from PIL import Image
+        for p in pngs:
+            w = p[:-4] + ".webp"
+            if not os.path.exists(p) and os.path.exists(w):
+                with Image.open(w) as im:
+                    im.save(p, "PNG")
+                os.unlink(w)
+        return 0, len(pngs)
+    mp = os.path.join(run_dir, "manifest.json")
+    with open(mp) as fh:
+        man = json.load(fh)
+
+    def swap(o):
+        if isinstance(o, dict):
+            return {k: swap(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [swap(v) for v in o]
+        if isinstance(o, str) and o.endswith(".png"):
+            return o[:-4] + ".webp"
+        return o
+    man = swap(man)
+    man["ext"] = "webp"
+    with open(mp, "w") as fh:
+        json.dump(man, fh, indent=1)
+    return ok, len(pngs)
+
+
 def tar_of(run_dir, names):
     b = io.BytesIO()
     with tarfile.open(fileobj=b, mode="w") as tf:
@@ -250,6 +307,14 @@ def main(argv=None):
         f"{size / 1e6:.0f} MB in {time.time() - t0:.0f}s")
     if a.dry:
         return 0
+    tw = time.time()
+    ok, n = to_webp(run_dir)
+    if ok:
+        files = [n2 for n2 in os.listdir(run_dir) if not n2.startswith(".") and os.path.isfile(os.path.join(run_dir, n2))]
+        size2 = sum(os.path.getsize(os.path.join(run_dir, n2)) for n2 in files)
+        log(f"as WebP: {ok} pictures, {size2 / 1e6:.0f} MB (was {size / 1e6:.0f} MB) in {time.time() - tw:.0f}s")
+    elif n:
+        log(f"WebP did not work for every picture ({n}); sending the PNGs")
 
     t1 = time.time()
     n_parts = 0
