@@ -60,7 +60,7 @@ GROUPS = {
 }
 OK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,120}\.(png|json|webp|npz|csv|geojson|gif|u8\.gz|bin\.gz)$")   # gif, u8.gz: the feeds radars; bin.gz: the mrrl volumes
 OK_DIR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,60}$")
-PART_BYTES = 20 * 1024 * 1024
+PART_BYTES = 8 * 1024 * 1024
 
 
 def log(msg):

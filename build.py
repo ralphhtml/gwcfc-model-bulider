@@ -60,7 +60,7 @@ def unlock_pipeline():
 os.environ.setdefault("GWCFC_NO_UPLOADS", "1")
 os.environ.setdefault("GWCFC_MAX_TOTAL_PX", "1600000")
 
-PART_BYTES = 40 * 1024 * 1024
+PART_BYTES = 8 * 1024 * 1024    # the host cut 40 MB uploads short ("the body does not match its hash"), Nov 25, 2026
 
 
 def log(msg):
