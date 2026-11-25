@@ -60,7 +60,7 @@ def unlock_pipeline():
 os.environ.setdefault("GWCFC_NO_UPLOADS", "1")
 os.environ.setdefault("GWCFC_MAX_TOTAL_PX", "1600000")
 
-PART_BYTES = 8 * 1024 * 1024    # the host cut 40 MB uploads short ("the body does not match its hash"), Nov 25, 2026
+PART_BYTES = 6 * 1024 * 1024    # the host takes at most 8 MiB in one request (PHP post_max_size; it ignores .user.ini): a bigger body arrives empty
 
 
 def log(msg):
