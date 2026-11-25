@@ -58,7 +58,7 @@ GROUPS = {
     "slow":  [("wafflehouse", 0), ("spaghetti", 0), ("satwinds", 0), ("wind", 0), ("ace", 0), ("nhccones", 0)],
     "daily": [("tornadoes", 0), ("hurritrack", 0), ("climo", 0), ("sst", 0)],
 }
-OK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,120}\.(png|json|webp|npz|csv|geojson|gif|u8\.gz)$")   # gif, u8.gz: the feeds radars
+OK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,120}\.(png|json|webp|npz|csv|geojson|gif|u8\.gz|bin\.gz)$")   # gif, u8.gz: the feeds radars; bin.gz: the mrrl volumes
 OK_DIR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,60}$")
 PART_BYTES = 20 * 1024 * 1024
 
@@ -214,7 +214,7 @@ def changed(root, sent):
     return sorted(out, key=lambda x: (x[0].count("/") == 0, x[0]))      # the top-level lists last
 
 
-def upload(base, key_path, tree, root, job, files, sent):
+def upload(base, key_path, tree, root, job, files, sent, keep_hours=None):
     run = time.strftime("%Y%m%d_%H", time.gmtime())
     batch, size, part = [], 0, 0
 
@@ -236,9 +236,70 @@ def upload(base, key_path, tree, root, job, files, sent):
     if batch:
         flush()
     # The commit goes even with nothing new: it is this job's check-in.
-    B.post(base, key_path, "tree", tree, run, "commit", part, json.dumps({"job": job}).encode())
+    body = {"job": job}
+    if keep_hours:
+        body["keep_hours"] = keep_hours                 # the store lets go of this tree's dated files sooner
+    B.post(base, key_path, "tree", tree, run, "commit", part, json.dumps(body).encode())
     for rel, h in files:
         sent[rel] = h
+
+
+def mrrl_static(code_dir, log=print):
+    """The radars published only as pictures (the UK composite, Taiwan, Israel, India, Portugal, Cuba, Bermuda, the
+    Dominican Republic, Jamaica), as plain files the site's store can hand out: for each radar, mrrl/<site>/list.json
+    (its volumes, oldest first, as the parsing server's /mrrl/list gave them) and each volume as <name>.bin.gz (the
+    Archive II bytes /mrrl/vol gave, gzipped). The parsing server made these on request; it is retired, so they are
+    made here from the frames the feeds job just wrote, with the server's own code (radar_extra). Only volumes not
+    made before are made; ones whose frame has gone are deleted. Returns the folder."""
+    import gzip
+    if code_dir not in sys.path:
+        sys.path.insert(0, code_dir)
+    import radar_extra as X
+    root = os.path.join(os.path.expanduser("~/wxdata"), "mrrl")
+    os.makedirs(root, exist_ok=True)
+    groups = [getattr(X, g, {}) for g in ("UK", "TW", "IL", "IN", "PT", "CUBA", "BDA", "DR", "JM")]
+    made = sites = 0
+    for g in groups:
+        for site in sorted(g):
+            if site in getattr(X, "L2DIR", {}):
+                continue                                # a real Level 2 feed: the page reads it itself
+            try:
+                lst = X.listing(site, None)
+            except Exception as e:                      # noqa: BLE001
+                log(f"mrrl: {site}: no list ({e.__class__.__name__})")
+                continue
+            d = os.path.join(root, site)
+            os.makedirs(d, exist_ok=True)
+            keep = set()
+            for v in lst:
+                name = str(v.get("name") or "")
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_\-]{0,80}", name):
+                    continue
+                f = name + ".bin.gz"
+                keep.add(f)
+                p = os.path.join(d, f)
+                if os.path.exists(p):
+                    continue
+                try:
+                    body = X.fetch_volume(site, name, None)
+                except Exception as e:                  # noqa: BLE001
+                    log(f"mrrl: {site} {name}: {e.__class__.__name__}")
+                    keep.discard(f)
+                    continue
+                with open(p + ".tmp", "wb") as fh:
+                    fh.write(gzip.compress(body, 6))
+                os.replace(p + ".tmp", p)
+                made += 1
+            for f in os.listdir(d):
+                if f.endswith(".bin.gz") and f not in keep:
+                    os.unlink(os.path.join(d, f))
+            rows = [{"name": v["name"], "size": 0, "t": v.get("t")} for v in lst if (str(v.get("name")) + ".bin.gz") in keep]
+            with open(os.path.join(d, "list.json.tmp"), "w") as fh:
+                json.dump({"volumes": rows, "made": int(time.time())}, fh, separators=(",", ":"))
+            os.replace(os.path.join(d, "list.json.tmp"), os.path.join(d, "list.json"))
+            sites += 1
+    log(f"mrrl: {sites} picture radars listed, {made} new volumes")
+    return root
 
 
 def run_job(name, base, key_path, code_dir, state, dry):
@@ -247,15 +308,20 @@ def run_job(name, base, key_path, code_dir, state, dry):
     root = os.path.join(os.path.expanduser("~/wxdata"), tree)
     os.makedirs(root, exist_ok=True)
     sent = state.setdefault(tree, {})
-    if want_seed and not state.get("seeded-" + tree) and base:
-        n = seed_top(base, tree, root, sent)
+    # Seeded from where the site reads (the store, once it is set up), not the retired parsing server: files seeded are
+    # counted as sent, and seeding from the server meant the store never got them (feeds/buoys.json and every radar
+    # list were missing there, Nov 25, 2026). The store lists no folders, so feeds seeds nothing and sends everything.
+    seed_base = (B.STORE or base) if name == "feeds" else base
+    if want_seed and not state.get("seeded-" + tree) and seed_base:
+        base_for_seed = seed_base
+        n = seed_top(base_for_seed, tree, root, sent)
         state["seeded-" + tree] = True
         if name == "nhccones":
-            n += seed_cones(base, root, sent)
+            n += seed_cones(base_for_seed, root, sent)
         if name == "sst":
             n += seed_sst(root, sent)
         if name == "feeds":
-            n += seed_feeds(base, root, sent)
+            n += seed_feeds(base_for_seed, root, sent)
         log(f"{name}: started from {n} of the server's files")
     if name in ONCE and base and _get(f"{base}/{tree}/{ONCE[name]}"):
         log(f"{name}: the server has it, nothing to build")
@@ -285,6 +351,17 @@ def run_job(name, base, key_path, code_dir, state, dry):
     # A job that failed and wrote nothing does not check in, so the server's own copy takes over if it goes on.
     if ran or files:
         upload(base, key_path, tree, root, name, files, sent)
+    # The picture radars as plain files for the store (see mrrl_static), right after the feeds that make them.
+    if name == "feeds":
+        try:
+            mroot = mrrl_static(code_dir, log)
+            msent = state.setdefault("mrrl", {})
+            mfiles = changed(mroot, msent)
+            if mfiles:
+                upload(base, key_path, "mrrl", mroot, name, mfiles, msent, keep_hours=6)
+                log(f"feeds: and {len(mfiles)} files of mrrl")
+        except Exception as e:                          # noqa: BLE001
+            log(f"mrrl: {e.__class__.__name__}: {str(e)[:120]}")
     # The other folders this job writes into: sent the same way (their check-in is this job's too).
     for other in also:
         oroot = os.path.join(os.path.expanduser("~/wxdata"), other)
