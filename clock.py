@@ -84,7 +84,9 @@ def listed(base):
 def _listed(base):
     import requests
     try:
-        r = requests.get(base + "/models/latest.json", timeout=90, headers={"User-Agent": "gwcfc-model-builder"})
+        # The site's store keeps the list as list.json: its host refuses models/latest.json itself (Nov 2026).
+        name = "/models/list.json" if base == B.STORE else "/models/latest.json"
+        r = requests.get(base + name, timeout=90, headers={"User-Agent": "gwcfc-model-builder"})
         if r.status_code != 200:
             return None
         models = r.json().get("models") or {}
