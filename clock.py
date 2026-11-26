@@ -70,6 +70,10 @@ def runs_due(entry, now):
 def listed(base):
     """{"model/region": run} of the runs listed as whole by both the server and the site's store (B.STORE). A run one
     of them is missing is built and sent again; a server that does not answer at all is left out."""
+    # With Hugging Face set up (hf_store.py), its list alone decides.
+    import hf_store
+    if hf_store.enabled():
+        return _from_models(hf_store.read_list().get("models") or {})
     # With the store set up, its list alone decides (the parsing server is retired: see B.server_has).
     if B.STORE:
         st = _listed(B.STORE)
@@ -91,6 +95,10 @@ def _listed(base):
         return None
     except Exception:                                   # noqa: BLE001
         return {}
+    return _from_models(models)
+
+
+def _from_models(models):
     out = {}
     for name, m in models.items():
         for region, e in (m.get("regions") or {}).items():

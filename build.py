@@ -215,6 +215,9 @@ def server_has(base, model, region, run):
     store set up, the store alone decides: the parsing server is retired (Nov 2026), and asking it too made a server
     that answers with an error count every run as missing, so all 182 model regions were "due" at once and the hourly
     models (HRRR, RAP) waited hours behind the ensembles. Without a store, the server decides as before."""
+    import hf_store
+    if hf_store.enabled():
+        return hf_store.has(model, region, run)
     if STORE:
         return _has(STORE, model, region, run)
     return _has(base, model, region, run, gone_ok=True)
@@ -319,6 +322,17 @@ def main(argv=None):
     elif n:
         log(f"WebP did not work for every picture ({n}); sending the PNGs")
 
+    import hf_store
+    if hf_store.enabled():
+        # Hugging Face holds the runs (hf_store.py): the web host is full and drops big uploads.
+        t1 = time.time()
+        hf_store.send_run(run_dir, a.model, a.region, run, log=log)
+        log(f"uploaded in {time.time() - t1:.0f}s")
+        try:
+            os.unlink(key_path)
+        except OSError:
+            pass
+        return 0
     t1 = time.time()
     n_parts = 0
     for i, names in enumerate(parts(run_dir)):

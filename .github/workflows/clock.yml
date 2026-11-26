@@ -36,6 +36,7 @@ jobs:
         env:
           GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
           GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 clock.py --loop 320
       - name: Start the next clock

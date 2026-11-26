@@ -5,3 +5,4 @@ requests
 eccodes
 h5py
 netCDF4
+huggingface_hub
