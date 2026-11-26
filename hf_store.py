@@ -23,6 +23,17 @@ KEEP_RUNS = int(os.environ.get("GWCFC_HF_KEEP") or "1")
 READ = f"https://huggingface.co/datasets/{REPO}/resolve/main"
 
 
+SHARDS = 64   # Hugging Face takes at most 10,000 files in one folder; a GEFS member run has more (Nov 26, 2026)
+
+
+def shard(name):
+    """Which of the run's SHARDS subfolders a file goes in. The page works out the same number (_hfShard)."""
+    h = 0
+    for c in name:
+        h = (h * 31 + ord(c)) & 0xFFFFFFFF
+    return "s%02d" % (h % SHARDS)
+
+
 def enabled():
     return bool((os.environ.get("HF_TOKEN") or "").strip())
 
@@ -67,6 +78,7 @@ def _entry(idx, model, region, run, man):
                 "res": man.get("res") or old.get("res") or head.get("res") or ""})
     if newest == run:
         ent["run"] = run
+        ent["shard"] = SHARDS
         ent["cycle"] = man.get("cycle", ent.get("cycle", ""))
         ent["path"] = f"{model}/{region}/{run}/manifest.json"
         ent["fields"] = sorted((man.get("fields") or {}).keys())
@@ -95,7 +107,8 @@ def send_run(run_dir, model, region, run, log=print):
     names = sorted(n for n in os.listdir(run_dir)
                    if not n.startswith(".") and os.path.isfile(os.path.join(run_dir, n)))
     prefix = f"models/{model}/{region}/{run}"
-    adds = [CommitOperationAdd(path_in_repo=f"{prefix}/{n}", path_or_fileobj=os.path.join(run_dir, n)) for n in names]
+    adds = [CommitOperationAdd(path_in_repo=f"{prefix}/{n}" if n == "manifest.json" else f"{prefix}/{shard(n)}/{n}",
+                               path_or_fileobj=os.path.join(run_dir, n)) for n in names]
     # The pictures are sent once, before the commit: a commit tried again after a clash only re-sends the list.
     api.preupload_lfs_files(REPO, additions=adds, repo_type="dataset")
     for attempt in range(12):
