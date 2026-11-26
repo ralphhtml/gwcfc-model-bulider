@@ -38,6 +38,7 @@ jobs:
         env:
           GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
           GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           IN_TARGETS: ${{ inputs.targets }}
         run: |
           if [ -z "$IN_TARGETS" ]; then IN_TARGETS="$(python3 clock.py --once | tail -1)"; export IN_TARGETS; fi
@@ -79,6 +80,7 @@ jobs:
         env:
           GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
           GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           IN_HOURS: ${{ inputs.hours }}
           TARGET: ${{ matrix.t }}
           RUN: ${{ matrix.run }}

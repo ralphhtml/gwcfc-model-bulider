@@ -28,4 +28,5 @@ jobs:
       - env:
           GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
           GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python3 extras.py --group daily
