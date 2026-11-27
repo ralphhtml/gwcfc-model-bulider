@@ -1,0 +1,66 @@
+name: WeatherNext 2 (Google DeepMind AI ensemble)
+
+# Google DeepMind's open WeatherNext 2 model (the 1 degree Mini), run on GitHub's own machines from ECMWF's free
+# analyses: four members side by side, 10 days each (about 25 minutes), then their mean is drawn and sent to
+# Hugging Face like any other model. Started by the clock every six hours, or by hand.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wn2
+  cancel-in-progress: false
+
+jobs:
+  member:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        member: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -q -r requirements.txt
+          pip install -q "jax[cpu]" https://github.com/google-deepmind/weathernext/archive/main.zip
+      - name: Run one member
+        env:
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+        run: python3 wn2.py member --member ${{ matrix.member }} --out members
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wn2-member-${{ matrix.member }}
+          path: members/
+          retention-days: 1
+
+  draw:
+    needs: member
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wn2-member-*
+          path: members
+          merge-multiple: true
+      - name: Draw and upload
+        env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python3 wn2.py draw --members members
