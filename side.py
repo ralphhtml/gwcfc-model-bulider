@@ -130,9 +130,97 @@ def mpas(out, dry):
         finish(d, model, region, run, dry)
 
 
+def _seed_from_hf(models_regions):
+    """The newest run of each (model, region) from Hugging Face, put on this machine's disk the way the server kept
+    it: flat in models/<model>/<region>/<run>/, the .npz data only (what GWCFM reads), and a manifest that names the
+    pictures .png again. GWCFM blends these members' runs off the disk, which on a fresh builder starts empty."""
+    import gfs_pipeline as G
+    import hf_store
+    lst = (hf_store.read_list() or {}).get("models") or {}
+    want = []
+    for m, r in models_regions:
+        e = ((lst.get(m) or {}).get("regions") or {}).get(r)
+        if not e or not e.get("run"):
+            continue
+        run = e["run"]
+        want.append((m, r, run))
+    if not want:
+        return 0
+    # Only each run's own folder is listed (the whole dataset holds hundreds of thousands of files), and the
+    # files are fetched straight from their addresses, many at a time.
+    import requests
+    from huggingface_hub import HfApi
+    api, t, n = HfApi(), time.time(), 0
+    jobs = []
+    for m, r, run in want:
+        base = f"models/{m}/{r}/{run}"
+        dst = os.path.join(G.OUT_DIR, m, r, run)
+        os.makedirs(dst, exist_ok=True)
+        try:
+            files = [x.path for x in api.list_repo_tree(hf_store.REPO, repo_type="dataset", path_in_repo=base, recursive=True)
+                     if getattr(x, "size", None) is not None]
+        except Exception as e:                 # noqa: BLE001
+            log(f"gwcfm: {base} could not be listed ({e.__class__.__name__})")
+            continue
+        # The data files where the run has them; otherwise its pictures, which GWCFM reads back to numbers by colour.
+        have_npz = {os.path.basename(f)[:-4] for f in files if f.endswith(".npz")}
+        for f in files:
+            b = os.path.basename(f)
+            if f.endswith(".npz") or f.endswith("/manifest.json") or (f.endswith(".webp") and b[:-5] not in have_npz):
+                jobs.append((f, os.path.join(dst, b)))
+
+    def get(job):
+        url, path = f"{hf_store.READ}/{job[0]}", job[1]
+        for _ in range(3):
+            try:
+                r = requests.get(url, timeout=60)
+                if r.status_code == 200:
+                    if path.endswith(".webp"):
+                        from PIL import Image
+                        import io
+                        with Image.open(io.BytesIO(r.content)) as im:
+                            im.save(path[:-5] + ".png", "PNG", compress_level=1)
+                    else:
+                        with open(path, "wb") as fh:
+                            fh.write(r.content)
+                    return True
+            except Exception:                  # noqa: BLE001
+                time.sleep(2)
+        return False
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        n = sum(ex.map(get, jobs))
+    # The manifests name the pictures .webp (hf_store turned them); the server's code reads .png names.
+    for m, r, run in want:
+        mp = os.path.join(G.OUT_DIR, m, r, run, "manifest.json")
+        if not os.path.exists(mp):
+            continue
+        with open(mp) as fh:
+            man = json.load(fh)
+        def back(o):
+            if isinstance(o, dict):
+                return {k: back(v) for k, v in o.items() if k != "ext"}
+            if isinstance(o, list):
+                return [back(v) for v in o]
+            return o[:-5] + ".png" if isinstance(o, str) and o.endswith(".webp") else o
+        with open(mp, "w") as fh:
+            json.dump(back(man), fh)
+    log(f"gwcfm: {n} data files of {len(want)} member runs fetched from Hugging Face in {time.time() - t:.0f}s")
+    return n
+
+
 def gwcfm(out, dry):
     import gfs_pipeline as G
     import gwcfm as W
+    need = set()
+    for region, d in W.DOMAINS.items():
+        for m in tuple(d["base"]) + tuple(d["members"]) + ((d["truth"],) if d.get("truth") else ()):
+            need.add((m, region))
+        for m, r in (d.get("extra") or {}).items():
+            need.add((m, r))
+    try:
+        _seed_from_hf(sorted(need))
+    except Exception as e:                     # noqa: BLE001
+        log(f"gwcfm: its member runs could not be fetched ({e.__class__.__name__}: {e})")
     man = W.build_latest()
     if not man:
         log("gwcfm: nothing built (its newest run is done, or its inputs are not out yet)")
