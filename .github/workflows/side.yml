@@ -1,0 +1,35 @@
+name: Side models (seasonal, MPAS, GWCFM, storms and fires)
+
+# The models the parsing server only drew on request: started by the clock every six hours, or by hand.
+# Never on pull requests: code from a fork must not see the secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  side:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [seasonal, mpas, gwcfm, moving]
+    concurrency:
+      group: side-${{ matrix.group }}
+      cancel-in-progress: false
+    name: side ${{ matrix.group }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -q -r requirements.txt
+      - name: Build and upload
+        env:
+          GWCFC_BASE: ${{ secrets.GWCFC_BASE }}
+          GWCFC_UPLOAD_KEY: ${{ secrets.GWCFC_UPLOAD_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python3 side.py --group ${{ matrix.group }}
