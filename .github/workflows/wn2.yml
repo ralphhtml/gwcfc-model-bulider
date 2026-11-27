@@ -52,7 +52,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -q -r requirements.txt
+      - run: pip install -q -r requirements.txt xarray netCDF4 h5netcdf scipy
       - uses: actions/download-artifact@v4
         with:
           pattern: wn2-member-*
